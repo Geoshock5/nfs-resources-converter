@@ -46,25 +46,25 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         unk_counter = 0
 
         self.available_acc_bits = 0
-        file_header = self.accumulator = read_short(buffer, 'big')
-        self.read_next(buffer)
-        self.esi = self.accumulator << 16
-        # if compressed size presented
-        if file_header & 0x100:
+        file_header = self.accumulator = read_short(buffer, 'big') # 2b read
+        self.read_next(buffer)                                     # 2b read
+        self.esi = self.accumulator << 16                          # push si 2b left = DD00
+        # if compressed size presented                             -- stock TNFS PBS are not compressed so this will not happen
+        if file_header & 0x100:                                    
             self.edx = read_int(buffer, 'big')
             self.available_acc_bits = 8
             self.esi = self.edx << 8
             self.accumulator = self.edx
             # reset size presented flag bit
             file_header = file_header & 0xFEFF
-        self.ebx = self.esi >> 0x18
-        self.available_acc_bits -= 8
-        self.esi = self.esi << 8
-        self.accumulate_if_needed(buffer)
-        self.eax = self.esi >> 16
-        self.available_acc_bits -= 16
-        self.esi = self.esi << 16
-        self.output_length = self.eax
+        self.ebx = self.esi >> 0x18                                # ebx will be little-endian value of size = 000D
+        self.available_acc_bits -= 8                               # cancel compressed value if compressed
+        self.esi = self.esi << 8                                   # make a space in esi = 00D0
+        self.accumulate_if_needed(buffer)                          # this will read unless compressed - so for TNFS, yes
+        self.eax = self.esi >> 16                                  # esi should be blank so = 0000
+        self.available_acc_bits -= 16                              # should be 16 by now, so = 0
+        self.esi = self.esi << 16                                  # esi should be blank so = 0000
+        self.output_length = self.eax                              # should be zero?
         self.accumulate_if_needed(buffer)
         self.edx = self.output_length = self.output_length | (self.ebx << 16)
         self.ebx = 1
