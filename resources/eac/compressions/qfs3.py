@@ -49,7 +49,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         file_header = self.accumulator = read_short(buffer, 'big') # 2b read
         self.read_next(buffer)                                     # 2b read
         self.esi = self.accumulator << 16                          # push si 2b left = DD00
-        # if compressed size presented                             -- stock TNFS PBS are not compressed so this will not happen
+        # if compressed size presented                             -- stock TNFS PBS are not compressed (0x30FB) so this will not happen
         if file_header & 0x100:                                    
             self.edx = read_int(buffer, 'big')
             self.available_acc_bits = 8
