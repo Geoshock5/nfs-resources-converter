@@ -12,8 +12,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.output_length = 0
         self.index_table_0 = []
         self.unk_table = [0] * 256    # values to output to uncompressed file
-        self.unk_table_2 = [0] * 256  # length of huffman tree code
-        self.unk_table_3 = [0] * 256  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number.
+        self.unk_table_2 = [0] * 256  # length of huffman tree code. Used to know how far to step sub-pointer while reading.
+        self.unk_table_3 = [0] * 16  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number.
         self.accumulator = 0
         self.available_acc_bits = 0
 
@@ -43,10 +43,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.define_variable('var_154', -0x154, 4)
 
         index_table_0_capacity = 0                                  # this is the sum of all the values in table_110
-        unk_counter = 0
 
         # set up counters for each operation
-        counter_1 = 0
         counter_2 = 0
         counter_3 = 0
         counter_4 = 0
@@ -85,7 +83,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.ebp = 0
         while True:                                         # Loop 1: this loop appears to be reading the first chunk of data 3 bytes at a time and generating tables from it.  table_110 and unk_table_3 are built.  Some values are set with set_value but not yet clear where/why
                                                             # eax = length of tree branch? ebx holds counters for inc/dec. edx holds command bits for mem storage. esi = input buffer
-            counter_1 += 1
             self.ebp = self.ebp << 1                        # TODO: evaluate evolution of ebp across loops
             self.ecx = index_table_0_capacity               # set to the sum of all flag bits so far
             self.eax = self.ebp - self.ecx                  # TODO: work out what this value represents. Could be some kind of mask?
@@ -146,9 +143,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.eax = self.ebp << val_shift      # shift the bp by ecx bits
                 self.ecx = self.eax & 0xFFFF        # drop the clamped result back into ecx.  Eventually this will overflow.
             
-            self.ebx = val_shift = val_shift - 1                # decrement ecx shift and drop it in ebx
+            val_shift = val_shift - 1                # decrement ecx shift
             self.eax = count_quad = count_quad + 4        # increment count*4 by 4 and drop it in eax
-            self.ebx = count_sing = count_sing + 1               # increment count and drop it in ebx
+            self.ebx = count_sing = count_sing + 1               # increment count
             self.set_value('[esp+eax+550h+var_154]', self.ecx)  # what is this value? varies run-to-run. ecx is the output - where is it going?
 
             if self.edx == 0:                   
@@ -157,10 +154,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 break                           # end of reading
         # Set things up for second loop
         self.ecx = 0xFFFFFFFF
-        unk_8 = self.ebx - 1                    # record the final count of steps for later.  Needed for loop 3.
+        unk_8 = count_sing - 1                    # record the final count of steps for later.  Needed for loop 3.
         self.set_value('[esp+ebx*4+550h+var_154]', self.ecx)
         self.ebx = 0
-        huff_table_0_iter_ptr = 0
+        huff_table_0_iter_ptr = 0               # keep a count of iterations in loop 2
         self.eax = 0xFF
         unk_4 = 0
         if index_table_0_capacity > 0:                          # Loop 2
@@ -170,14 +167,14 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 if self.get_register_signed_value('esi') >= 0:  # if leading bit = 0
                     self.edx = 2
                     if (self.esi >> 16) == 0:
-                        while True:
-                            self.ebp = self.esi
-                            self.edx += 1
-                            self.available_acc_bits -= 1
-                            self.ebp = self.ebp >> 0x1F
-                            self.esi = self.esi << 1
+                        while True:                             # read through until we hit a 1
+                            self.ebp = self.esi                 # open inbuf
+                            self.edx += 1                       # count bits read (zeroes) in edx
+                            self.available_acc_bits -= 1        # reduce accum counter
+                            self.ebp = self.ebp >> 0x1F         # check last bit of ebp
+                            self.esi = self.esi << 1            # move sub-pointer
                             self.accumulate_if_needed(buffer)
-                            if self.ebp != 0:
+                            if self.ebp != 0:                   # stop if we hit 1
                                 break
                     else:
                         while self.get_register_signed_value('esi') >= 0: # keep reading esi bit-by-bit until we hit a one
@@ -187,7 +184,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         self.available_acc_bits -= self.ebx
                         self.esi = self.esi << 1
                         self.accumulate_if_needed(buffer)
-                    self.ebx = self.accumulator << 8
+                    # self.ebx = self.accumulator << 8
                     if self.get_register_signed_value('edx') <= 16:
                         self.ebx = self.esi >> (0x20 - self.edx)
                         self.cl = self.dl
@@ -205,9 +202,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         self.ecx = self.esi >> 16
                         self.available_acc_bits -= 16
                         self.esi = self.esi << 16
-                        unk_7 = self.ecx
+                        # unk_7 = self.ecx
                         self.accumulate_if_needed(buffer)
-                        self.ecx = unk_7
+                        # self.ecx = unk_7
                         self.ebx = (self.ebx << 16) | self.ecx
                     self.cl = self.dl
                     self.edx = 1 << self.cl
@@ -227,10 +224,13 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.edx = huff_table_0_iter_ptr
                 self.ecx = index_table_0_capacity
                 self.ebx = self.edx + 1
-                self.index_table_0[self.edx] = self.al
-                huff_table_0_iter_ptr = self.ebx
-                if self.get_register_signed_value('ebx') >= self.get_register_signed_value('ecx'):
+                self.index_table_0[huff_table_0_iter_ptr] = self.al
+                huff_table_0_iter_ptr += 1
+                if huff_table_0_iter_ptr >= index_table_0_capacity:
                     break
+        
+        # loop 3 - create output value and length table
+        unk_counter = 0
         self.unk_table_2 = [0x40] * 256 # create a 256-length table, value 64
         self.edx = 0
         self.ebx = 0
@@ -238,31 +238,27 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         unk_5 = 1
         unk_9 = 0                       # used in loop 3 - and loop 4 in case of break flag (0x60h / 96d)
         if self.ecx >= 1:               # should be > 1 as this value came from loop 1
-            self.ecx = 7
-            self.eax = 4
-            count_quad = self.ecx
-            val_shift = self.eax
+            val_shift = self.eax = 4
+            count_loop3 = self.ecx = 7
             while True:                                         # populate unk_table and unk_table_2
                 counter_3 += 1
                 self.eax = val_shift
                 assert self.eax % 4 == 0
-                self.eax = table_110[int(self.eax / 4)]         # read back in from table_110
+                self.eax = table_110[int(val_shift / 4)]         # read back in from table_110
                 self.ebp = unk_5
                 unk_6 = self.eax
                 if self.get_register_signed_value('ebp') >= 9:
                     break
-                self.ecx = count_quad
+                self.ecx = count_loop3
                 self.ebp = 1 << self.cl
                 break_outer = False
                 continue_outer = False
                 while True:
-                    self.eax = unk_6 - 1
-                    unk_6 = self.eax
+                    self.eax = unk_6 = unk_6 - 1
                     if self.eax == 0xFFFFFFFF:
-                        self.ebp = val_shift = val_shift + 4
-                        self.eax = count_quad = count_quad - 1
-                        self.ecx = unk_5 + 1
-                        unk_5 = self.ecx
+                        val_shift = self.ebp = val_shift + 4
+                        count_loop3 = self.eax = count_loop3 - 1
+                        unk_5 = self.ecx = unk_5 + 1
                         self.ebp = unk_8
                         if self.get_register_signed_value('ecx') <= self.get_register_signed_value('ebp'):
                             continue_outer = True
@@ -276,9 +272,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         unk_0 = unk_5
                         self.ecx = index_table_0_value
                         self.eax = unk_1
-                        if self.eax == self.ecx:
-                            self.eax = unk_5
-                            unk_9 = self.eax
+                        if unk_1 == index_table_0_value:
+                            self.eax = unk_9 = unk_5
                             unk_0 = 0x60
                         self.eax = 0
                         if self.get_register_signed_value('ebp') <= 0:
@@ -287,10 +282,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                             self.edx += 1
                             self.cl = index_table_0_value
                             self.ebx += 1
-                            self.unk_table[self.edx - 1] = self.cl
+                            self.unk_table[self.edx - 1] = index_table_0_value
                             self.cl = unk_0
                             self.eax += 1
-                            self.unk_table_2[self.ebx - 1] = self.cl
+                            self.unk_table_2[self.ebx - 1] = unk_0
                 if break_outer:
                     break
                 if continue_outer:
@@ -428,7 +423,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     self.append_to_output(uncompressed, self.eax & 0xFF)
             else:
                 self.reuse_output_byte(uncompressed, self.ebp)
-        print("C1=" + str(counter_1))
+        print("C1=" + str(count_sing - 1))
         print("C2=" + str(counter_2))
         print("C3=" + str(counter_3))
         print("C4=" + str(counter_4))
