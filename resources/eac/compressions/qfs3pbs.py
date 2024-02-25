@@ -11,8 +11,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         super().__init__(*args, asm_virtual_memory_size=2 * 1024, **kwargs)
         self.output_length = 0
         self.index_table_0 = []
-        self.unk_table = [0] * 256    # values to output to uncompressed file
-        self.unk_table_2 = [0] * 256  # length of huffman tree code. Used to know how far to step sub-pointer while reading.
+        self.out_value_table = [0] * 256    # values to output to uncompressed file
+        self.out_len_table = [0] * 256  # length of huffman tree code. Used to know how far to step sub-pointer while reading.
         self.unk_table_3 = [0] * 16  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number.
         self.accumulator = 0
         self.available_acc_bits = 0
@@ -154,7 +154,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 break                           # end of reading
         # Set things up for second loop
         self.ecx = 0xFFFFFFFF
-        unk_8 = count_sing - 1                    # record the final count of steps for later.  Needed for loop 3.
+        count_loop1 = count_sing - 1                    # record the final count of steps for later.  Needed for loop 3.
         self.set_value('[esp+ebx*4+550h+var_154]', self.ecx)
         self.ebx = 0
         huff_table_0_iter_ptr = 0               # keep a count of iterations in loop 2
@@ -229,87 +229,74 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 if huff_table_0_iter_ptr >= index_table_0_capacity:
                     break
         
-        # loop 3 - create output value and length table
-        unk_counter = 0
-        self.unk_table_2 = [0x40] * 256 # create a 256-length table, value 64
-        self.edx = 0
-        self.ebx = 0
-        self.ecx = unk_8
+        # Loop 3 - create output value and length table.  Write out the main characters first, then go back for the special characters from Loop 1.
+        in_table_idx = 0
+        self.out_len_table = [0x40] * 256 # create a 256-length table, value 64. This is the length of each output value in the input stream.
+        out_table_idx = 0
         unk_5 = 1
         unk_9 = 0                       # used in loop 3 - and loop 4 in case of break flag (0x60h / 96d)
-        if self.ecx >= 1:               # should be > 1 as this value came from loop 1
-            val_shift = self.eax = 4
-            count_loop3 = self.ecx = 7
-            while True:                                         # populate unk_table and unk_table_2
+        if count_loop1 >= 1:               # should be > 1 as this value came from loop 1
+            val_shift = 4
+            count_loop3 = 7
+            while True:                                         # populate out_value_table and out_len_table
                 counter_3 += 1
-                self.eax = val_shift
-                assert self.eax % 4 == 0
-                self.eax = table_110[int(val_shift / 4)]         # read back in from table_110
-                self.ebp = unk_5
-                unk_6 = self.eax
-                if self.get_register_signed_value('ebp') >= 9:
+                assert val_shift % 4 == 0
+                count_loop3_inner = table_110[int(val_shift / 4)]         # read back in from table_110
+                if unk_5 >= 9:
                     break
-                self.ecx = count_loop3
-                self.ebp = 1 << self.cl
                 break_outer = False
                 continue_outer = False
                 while True:
-                    self.eax = unk_6 = unk_6 - 1
-                    if self.eax == 0xFFFFFFFF:
-                        val_shift = self.ebp = val_shift + 4
-                        count_loop3 = self.eax = count_loop3 - 1
-                        unk_5 = self.ecx = unk_5 + 1
-                        self.ebp = unk_8
-                        if self.get_register_signed_value('ecx') <= self.get_register_signed_value('ebp'):
+                    count_loop3_inner = count_loop3_inner - 1
+                    if count_loop3_inner < 0:
+                        val_shift = val_shift + 4
+                        count_loop3 -= 1
+                        unk_5 += 1
+                        if unk_5 <= val_shift:
                             continue_outer = True
                             break
                         else:
                             break_outer = True
                             break
                     else:
-                        index_table_0_value = self.index_table_0[unk_counter]
-                        unk_counter += 1
+                        index_table_0_value = self.index_table_0[in_table_idx]
+                        in_table_idx += 1
                         unk_0 = unk_5
-                        self.ecx = index_table_0_value
-                        self.eax = unk_1
                         if unk_1 == index_table_0_value:
-                            self.eax = unk_9 = unk_5
+                            unk_9 = unk_5
                             unk_0 = 0x60
-                        self.eax = 0
-                        if self.get_register_signed_value('ebp') <= 0:
+                        if ((1 << count_loop3) <=0):
                             continue
-                        while self.get_register_signed_value('eax') < self.get_register_signed_value('ebp'):
-                            self.edx += 1
-                            self.cl = index_table_0_value
-                            self.ebx += 1
-                            self.unk_table[self.edx - 1] = index_table_0_value
-                            self.cl = unk_0
-                            self.eax += 1
-                            self.unk_table_2[self.ebx - 1] = unk_0
+                        for x in range(0,(1 << count_loop3)):
+                            out_table_idx += 1
+                            self.out_value_table[out_table_idx - 1] = index_table_0_value
+                            self.out_len_table[out_table_idx - 1] = unk_0
                 if break_outer:
                     break
                 if continue_outer:
                     continue
                 break
-        while True:                                             # write the file out using the lookup tables
+
+        # Loop 4: write the file out using the lookup tables
+        while True:                                             
             counter_4 += 1
             if len(uncompressed) > self.output_length:
                 raise Exception('Uncompress algorythm writes more that file length')
-            self.eax = self.unk_table_2[self.esi >> 0x18]       # should be little-endian - clamp index to 256. Len to read from inbuf / esi
+            self.eax = self.out_len_table[self.esi >> 0x18]       # should be little-endian - clamp index to 256. Len to read from inbuf / esi
             self.available_acc_bits -= self.eax
             while self.available_acc_bits >= 0:
                 self.edx = self.esi >> 0x18                     # get 1 byte from front of stream
                 for _ in range(4):
-                    self.append_to_output(uncompressed, self.unk_table[self.edx])   # read value of unk_table from instream lookup and output
+                    self.append_to_output(uncompressed, self.out_value_table[self.edx])   # read value of out_value_table from instream lookup and output
                     self.esi = self.esi << self.al
                     self.edx = self.esi >> 0x18
-                    self.eax = self.unk_table_2[self.edx]   # length of value that was read from input
+                    self.eax = self.out_len_table[self.edx]   # length of value that was read from input
                     self.available_acc_bits -= self.eax
                     if self.available_acc_bits < 0:
                         break                                   # stop and get more input
             self.available_acc_bits += 0x10                     # add 2 bytes to available acc. bits tally
             if self.available_acc_bits >= 0:
-                self.append_to_output(uncompressed, self.unk_table[(self.esi >> 0x18)]) # read value of unk_table from instream lookup
+                self.append_to_output(uncompressed, self.out_value_table[(self.esi >> 0x18)]) # read value of out_value_table from instream lookup
                 self.read_next(buffer)                          # read 2 bytes
                 self.esi = self.accumulator << (0x10 - self.available_acc_bits) # advance by 16 minus available bits
                 continue                                        # skip the rest and restart the loop

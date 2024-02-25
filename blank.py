@@ -2,7 +2,7 @@ from io import BufferedReader, IOBase
 from resources.eac.compressions.qfs3pbs import Qfs3Compression as Qfs
 
 inbuf = open("TSUPRA.PBS","rb")
-outbuf = open("decoded.pbs","wb")
+outbuf = open("decoded-jt.pbs","wb")
 
 uncom = Qfs()
 
