@@ -1,5 +1,5 @@
 from io import BufferedReader, IOBase
-from resources.eac.compressions.qfs3 import Qfs3Compression as Qfs
+from resources.eac.compressions.qfs3-pbs import Qfs3Compression as Qfs
 
 print("Hello world!")
 

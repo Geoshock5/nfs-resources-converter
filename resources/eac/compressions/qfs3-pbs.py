@@ -138,21 +138,19 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             self.eax = count_quad
             assert self.eax % 4 == 0                # should always be true as unk_2 increments by 4 per run
             table_110[int(self.eax / 4)] = self.edx # holding the value of edx from this run
-            self.eax = index_table_0_capacity       # retrieve total values in the tree so far
+            self.eax = index_table_0_capacity = index_table_0_capacity + self.edx       # retrieve total values in the tree so far
             self.ebp += self.edx                    # add the value of the 2 bits to the base pointer
-            self.eax += self.edx                    # add the 2 bits to eax
             self.ecx = 0                            # zero ecx ready for next operation
-            index_table_0_capacity = self.eax       # add the total values counted from this run to the total
             if self.edx != 0:                       # were there any values recorded this run?
-                self.cl = val_shift & 0xFF              # Bitmask the counter
-                self.eax = self.ebp << self.cl      # shift the bp by ecx bits
+                self.cl = val_shift = val_shift & 0xFF              # Bitmask the counter
+                self.eax = self.ebp << val_shift      # shift the bp by ecx bits
                 self.ecx = self.eax & 0xFFFF        # drop the clamped result back into ecx.  Eventually this will overflow.
-            self.ebx = val_shift - 1                # decrement unk_3 but drop it in ebx
-            self.eax = count_quad = count_quad + 4        # increment unk_2 by 4 and drop it in eax
-            val_shift = self.ebx                    # formally decrement unk_3.  Is this a counter of e.g. number of chunks / instructions?
-            self.ebx = count_sing + 1               # increment unk_90 but drop it in ebx
+            
+            self.ebx = val_shift = val_shift - 1                # decrement ecx shift and drop it in ebx
+            self.eax = count_quad = count_quad + 4        # increment count*4 by 4 and drop it in eax
+            self.ebx = count_sing = count_sing + 1               # increment count and drop it in ebx
             self.set_value('[esp+eax+550h+var_154]', self.ecx)  # what is this value? varies run-to-run. ecx is the output - where is it going?
-            count_sing = self.ebx                   # formally increment unk_90
+
             if self.edx == 0:                   
                 continue                        # not finished yet - jump to start of loop
             if self.ecx == 0:                   # check if we've accumulated all values (255) yet
