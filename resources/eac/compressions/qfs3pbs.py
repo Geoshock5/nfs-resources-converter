@@ -77,18 +77,23 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.esi = self.esi << 8
         char_count = self.al                                     # store for later. Count of characters in uncompressed file.  Not used in loop 1 but this equals the sum of values in table_110
         self.accumulate_if_needed(buffer)
+        
+        # Loop 1: : this loop appears to be reading the first chunk of data 3 bytes at a time and generating tables from it.
+        # table_110 and unk_table_3 are built.
+        # Some values are set with set_value but not yet clear where/why
         count_sing = 1
         val_shift = 15                                          # gives a max of 16 values. Decrements with every iteration of loop 1. Used to bitshift ebp when edx > 0
         count_quad = 4                                           # 0b100
         self.ebp = 0
-        while True:                                         # Loop 1: this loop appears to be reading the first chunk of data 3 bytes at a time and generating tables from it.  table_110 and unk_table_3 are built.  Some values are set with set_value but not yet clear where/why
+        
+        while True:                                         # Loop 1
                                                             # eax = length of tree branch? ebx holds counters for inc/dec. edx holds command bits for mem storage. esi = input buffer
             self.ebp = self.ebp << 1                        # TODO: evaluate evolution of ebp across loops
             self.ecx = index_table_0_capacity               # set to the sum of all flag bits so far
             self.eax = self.ebp - self.ecx                  # TODO: work out what this value represents. Could be some kind of mask?
             self.edx = count_quad                                # unk_2 is always a multiple of 4 as it increments by 4 each run
             assert self.edx % 4 == 0                        # logic below will work in different way if not
-            self.unk_table_3[int(self.edx / 4)] = self.eax  # store the value above (bp - ecx) in a lookup table. How many we've had vs could have had?
+            self.unk_table_3[int(self.edx / 4)] = self.eax  # store the value above (bp - ecx) in unk_table_3. How many we've had vs could have had?
             if self.get_register_signed_value('esi') >= 0:  # only switch if the leading bit is 0
                 self.eax = 2                                # start eax at 2
                 if (self.esi >> 16) == 0:                   # check we aren't low on data
@@ -160,7 +165,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         huff_table_0_iter_ptr = 0               # keep a count of iterations in loop 2
         self.eax = 0xFF
         unk_4 = 0
-        if index_table_0_capacity > 0:                          # Loop 2
+        
+        # Loop 2
+        if index_table_0_capacity > 0:
             self.index_table_0 = [None] * index_table_0_capacity
             while True:                                         # iterate through, populating index_table_0.  Count runs in ebx.  Hold total run count in ecx and break at num limit.
                 counter_2 += 1
@@ -220,10 +227,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     self.edx = self.al
                     if self.edx not in self.index_table_0:
                         self.ebx -= 1
-                self.edx = self.al
-                self.edx = huff_table_0_iter_ptr
-                self.ecx = index_table_0_capacity
-                self.ebx = self.edx + 1
+                # self.edx = self.al
+                # self.edx = huff_table_0_iter_ptr
+                # self.ecx = index_table_0_capacity
+                # self.ebx = self.edx + 1
                 self.index_table_0[huff_table_0_iter_ptr] = self.al
                 huff_table_0_iter_ptr += 1
                 if huff_table_0_iter_ptr >= index_table_0_capacity:
@@ -283,20 +290,24 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 break
 
         # Loop 4: write the file out using the lookup tables
+        lookup_val = 0
+        next_val_length = 0
+        huff_key = 0
+        
         while True:                                             
             counter_4 += 1
             if len(uncompressed) > self.output_length:
                 raise Exception('Uncompress algorythm writes more that file length')
-            self.eax = self.out_len_table[self.esi >> 0x18]       # should be little-endian - clamp index to 256. Len to read from inbuf / esi
-            self.available_acc_bits -= self.eax
+            next_val_length = self.eax = self.out_len_table[self.esi >> 0x18]       # should be little-endian - clamp index to 256. Len to read from inbuf / esi
+            self.available_acc_bits -= next_val_length                              # should be ok unless we throw the escape flag (0x60h / 96d)
             while self.available_acc_bits >= 0:
-                self.edx = self.esi >> 0x18                     # get 1 byte from front of stream
+                huff_key = self.esi >> 0x18                     # get 1 byte from front of stream
                 for _ in range(4):
-                    self.append_to_output(uncompressed, self.out_value_table[self.edx])   # read value of out_value_table from instream lookup and output
-                    self.esi = self.esi << self.al
-                    self.edx = self.esi >> 0x18
-                    self.eax = self.out_len_table[self.edx]   # length of value that was read from input
-                    self.available_acc_bits -= self.eax
+                    self.append_to_output(uncompressed, self.out_value_table[huff_key])   # read value of out_value_table from instream lookup and output
+                    self.esi = self.esi << next_val_length
+                    huff_key = self.esi >> 0x18
+                    next_val_length = self.out_len_table[huff_key]   # length of value that was read from input
+                    self.available_acc_bits -= next_val_length
                     if self.available_acc_bits < 0:
                         break                                   # stop and get more input
             self.available_acc_bits += 0x10                     # add 2 bytes to available acc. bits tally
@@ -305,27 +316,26 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.read_next(buffer)                          # read 2 bytes
                 self.esi = self.accumulator << (0x10 - self.available_acc_bits) # advance by 16 minus available bits
                 continue                                        # skip the rest and restart the loop
-            self.available_acc_bits += self.eax - 0x10
-            if self.eax == 0x60:                                # 96 = specific break code?
-                self.eax = unk_9
+            self.available_acc_bits += next_val_length - 0x10
+            if next_val_length == 0x60:                                # 96 = specific break code?
+                next_val_length = unk_9
             else:
-                self.eax = 8
-                self.edx = self.esi >> 16
-                self.ecx = 0x20
+                next_val_length = 8
+                self.edx = self.esi >> 16   # edx is a 16-bit value
+                self.ecx = 0x20             # 32d
                 while True:
-                    self.eax += 1
-                    self.ebp = self.get_value('[esp+ecx+550h+var_14C]')[0]
+                    next_val_length += 1
+                    self.ebp = self.get_value('[esp+ecx+550h+var_14C]')[0] # return an 8-bit code?
                     self.ecx += 4
                     if self.edx < self.ebp:
                         break
-            self.ecx = 0x20 - self.eax
-            self.edx = self.esi >> self.cl
-            self.cl = self.al
-            self.available_acc_bits -= self.eax
-            self.esi = self.esi << self.cl
-            self.ecx = self.unk_table_3[self.eax]
-            self.eax = self.edx - self.ecx
-            self.al = self.index_table_0[self.eax]
+            self.ecx = 0x20 - next_val_length
+            self.edx = self.esi >> self.cl                  # copy next val into edx
+            self.available_acc_bits -= next_val_length
+            self.esi = self.esi << next_val_length          # advance the buffer
+            self.ecx = self.unk_table_3[next_val_length]    # copy val for this length into ecx
+            self.eax = self.edx - self.ecx                  # calculate index_table_0 index
+            self.al = self.index_table_0[self.eax]          # get 8-bit output value
             if self.al != char_count:
                 if self.available_acc_bits >= 0:
                     self.append_to_output(uncompressed, self.al)
@@ -334,18 +344,19 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             if self.al != char_count:
                 self.append_to_output(uncompressed, self.al)
                 continue
-            if self.get_register_signed_value('esi') >= 0:
+            # FALLTHROUGH CASE: fill/repeat the last value
+            if self.get_register_signed_value('esi') >= 0:                  # if we hit a zero
                 self.eax = 2
-                if (self.esi >> 16) == 0:
-                    self.ebp = 0
-                    while unk0 == 0:
+                if (self.esi >> 16) == 0:                                   # if we have at least 16 zeroes we might be out of data
+                #    self.ebp = 0
+                    while unk0 == 0:                                        # count the zeroes in eax
                         unk0 = self.esi >> 0x1F
                         self.eax += 1
                         self.available_acc_bits -= 1
                         self.esi = self.esi << 1
-                        self.accumulate_if_needed(buffer)
+                        self.accumulate_if_needed(buffer)                   # make sure we don't run out of buffer
                 else:
-                    while True:
+                    while True:                                             # count the zeroes in eax until we hit a 1
                         self.esi = self.esi << 1
                         self.eax += 1
                         if self.get_register_signed_value('esi') < 0:
@@ -382,10 +393,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.eax = self.eax - 4
                 fill_bytes_length = self.eax
             else:
-                self.eax = self.esi >> 0x1D
+                self.eax = self.esi >> 0x1D         # read 3 bits
                 self.available_acc_bits -= 3
-                self.esi = self.esi << 3
-                fill_bytes_length = self.eax
+                self.esi = self.esi << 3            # advance the buffer
+                fill_bytes_length = self.eax        
                 self.accumulate_if_needed(buffer)
                 fill_bytes_length -= 4
             self.ebp = fill_bytes_length
@@ -395,13 +406,13 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.esi = self.esi << 1
                 self.accumulate_if_needed(buffer)
                 if self.ebp != 0:
-                    if file_header == 0x34FB:
+                    if file_header == 0x34FB:                   # not used as we are 0x30FB?
                         value_b = value_a = 0
                         for i in range(self.output_length):
                             value_a += uncompressed[i]
                             value_b += value_a
                             uncompressed[i] = value_b & 0xFF
-                    elif file_header == 0x32FB:
+                    elif file_header == 0x32FB:                 # not used as we are 0x30FB?
                         value = 0
                         for i in range(self.output_length):
                             value += uncompressed[i]
