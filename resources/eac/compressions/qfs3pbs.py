@@ -78,9 +78,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         char_count = self.al                                     # store for later. Count of characters in uncompressed file.  Not used in loop 1 but this equals the sum of values in table_110
         self.accumulate_if_needed(buffer)
         
-        # Loop 1: : this loop appears to be reading the first chunk of data 3 bytes at a time and generating tables from it.
-        # table_110 and unk_table_3 are built.
-        # Some values are set with set_value but not yet clear where/why
+        # Loop 1: : this loop appears to be reading the first chunk of data and generating tables from it.
+        # table_110 and unk_table_3 are built.  Unk_table_3 is used in loop 4 as a lookup to pull values from index_table_0 for output.
+        # Some values are set with set_value but not yet clear where.  These are also used to generate the output in loop 4.
         count_sing = 1
         val_shift = 15                                          # gives a max of 16 values. Decrements with every iteration of loop 1. Used to bitshift ebp when edx > 0
         count_quad = 4                                           # 0b100
@@ -333,9 +333,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             self.edx = self.esi >> self.cl                  # copy next val into edx
             self.available_acc_bits -= next_val_length
             self.esi = self.esi << next_val_length          # advance the buffer
-            self.ecx = self.unk_table_3[next_val_length]    # copy val for this length into ecx
+            self.ecx = self.unk_table_3[next_val_length]    # copy val for this length into ecx from unk_table_3
             self.eax = self.edx - self.ecx                  # calculate index_table_0 index
-            self.al = self.index_table_0[self.eax]          # get 8-bit output value
+            self.al = self.index_table_0[self.eax]          # get 8-bit output value from index_table_0 and write out to file
             if self.al != char_count:
                 if self.available_acc_bits >= 0:
                     self.append_to_output(uncompressed, self.al)
