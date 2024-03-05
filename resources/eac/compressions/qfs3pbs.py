@@ -192,13 +192,13 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         self.esi = self.esi << 1
                         self.accumulate_if_needed(buffer)
                     # self.ebx = self.accumulator << 8
-                    if self.get_register_signed_value('edx') <= 16:
+                    if self.get_register_signed_value('edx') <= 16:    # 16-bit value; easy to manage
                         self.ebx = self.esi >> (0x20 - self.edx)
                         self.cl = self.dl
                         self.available_acc_bits -= self.edx
                         self.esi = self.esi << self.cl
                         self.accumulate_if_needed(buffer)
-                    else:
+                    else:                                            # 32-bit value; need to combine the bytes to make a long value
                         unk_4 = self.edx - 16
                         self.ecx = 0x20 - unk_4
                         self.ebx = self.esi >> self.cl
@@ -216,7 +216,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     self.cl = self.dl
                     self.edx = 1 << self.cl
                     self.ebx += self.edx
-                else:
+                else:                                # leading 1 has a special code? Max. 3 bits long?
                     self.ebx = self.esi >> 0x1D
                     self.available_acc_bits -= 3
                     self.esi = self.esi << 3
@@ -224,8 +224,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.ebx -= 3
                 while self.ebx != 0:
                     self.al += 1
-                    self.edx = self.al
-                    if self.edx not in self.index_table_0:
+                    self.edx = self.al                        # TODO: can be simplified to remove use of self.edx
+                    if self.edx not in self.index_table_0:    # TODO: change ref to self.al
                         self.ebx -= 1
                 # self.edx = self.al
                 # self.edx = huff_table_0_iter_ptr
