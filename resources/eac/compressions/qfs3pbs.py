@@ -37,7 +37,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         uncompressed: bytearray = bytearray()
 
-        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1
+        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 8
 
         self.define_variable('var_14C', -0x14C, 4)
         self.define_variable('var_154', -0x154, 4)
@@ -88,10 +88,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         
         while True:                                         # Loop 1
                                                             # eax = length of tree branch? ebx holds counters for inc/dec. edx holds command bits for mem storage. esi = input buffer
-            self.ebp = self.ebp << 1                        # TODO: evaluate evolution of ebp across loops
+            self.ebp = self.ebp << 1                        # TODO: evaluate evolution of ebp across loops. Going deeper into the Huff tree? Each branch can split in 2 so bitshift of 1 will allow this.
             self.ecx = index_table_0_capacity               # set to the sum of all flag bits so far
-            self.eax = self.ebp - self.ecx                  # TODO: work out what this value represents. Could be some kind of mask?
-            self.edx = count_quad                                # unk_2 is always a multiple of 4 as it increments by 4 each run
+            self.eax = self.ebp - self.ecx                  # TODO: work out what this value represents. Could be some kind of mask? Values yet to count in tree?
+            self.edx = count_quad                                # always a multiple of 4 as it increments by 4 each run
             assert self.edx % 4 == 0                        # logic below will work in different way if not
             self.unk_table_3[int(self.edx / 4)] = self.eax  # store the value above (bp - ecx) in unk_table_3. How many we've had vs could have had?
             if self.get_register_signed_value('esi') >= 0:  # only switch if the leading bit is 0
@@ -166,7 +166,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.eax = 0xFF
         unk_4 = 0
         
-        # Loop 2
+        # Loop 2 - builds index_table_0. Reads from the input file.
+        # Each entry read is the offset from the previous value, i.e. value[2] = value[1] + value_read,
+        # but skip any previous values that already occurred in the list (i.e. if value[1] < value[0] < value[2] it will be + 1).
         if index_table_0_capacity > 0:
             self.index_table_0 = [None] * index_table_0_capacity
             while True:                                         # iterate through, populating index_table_0.  Count runs in ebx.  Hold total run count in ecx and break at num limit.
@@ -224,13 +226,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 self.ebx -= 3
                 while self.ebx != 0:
                     self.al += 1
-                    self.edx = self.al                        # TODO: can be simplified to remove use of self.edx
-                    if self.edx not in self.index_table_0:    # TODO: change ref to self.al
+                    if self.al not in self.index_table_0:
                         self.ebx -= 1
-                # self.edx = self.al
-                # self.edx = huff_table_0_iter_ptr
-                # self.ecx = index_table_0_capacity
-                # self.ebx = self.edx + 1
                 self.index_table_0[huff_table_0_iter_ptr] = self.al
                 huff_table_0_iter_ptr += 1
                 if huff_table_0_iter_ptr >= index_table_0_capacity:
@@ -240,12 +237,12 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         in_table_idx = 0                # The index to read from index_table_0. Increments after every read.
         self.out_len_table = [0x40] * 256 # create a 256-length table, value 64. This is the length of each output value in the input stream.
         out_table_idx = 0               # The index of out table to write to.  Increments after every value.
-        huff_table_ptr_len = 1          # Unknown counter. Used in loop 3 only.  Start 1, max 8.  Length in bits of the Huffman table pointer being read from source in loop 4.
+        current_out_length = 1          # Unknown counter. Used in loop 3 only.  Start 1, max 8.  Length in bits of the Huffman table pointer being read from source in loop 4.
         unk_9 = 0                       # used in loop 3 - and loop 4 in case of break flag (0x60h / 96d)
         
         # Run outer and inner loops to populate output tables.  Expected output:
         #   - Write the increasing value of index_table_0 to out_value_table, table_110[idx] value times.
-        #   - Write the increasing value of huff_table_ptr_len to out_len_table, table_110[idx] value times.
+        #   - Write the increasing value of current_out_len to out_len_table, table_110[idx] value times.
         if count_loop1 >= 1:               # should be > 1 as this value came from loop 1
             val_shift = 4
             count_loop3 = 7
@@ -253,7 +250,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 counter_3 += 1                                  # TODO: remove, unnecessary.  Used only for debug at this time.
                 assert val_shift % 4 == 0
                 count_loop3_inner = table_110[int(val_shift / 4)]         # read back in from table_110
-                if huff_table_ptr_len >= 9:                                  # run max 8 times
+                if current_out_length >= 9:                                  # run max 8 times
                     break
                 break_outer = False
                 continue_outer = False
@@ -262,25 +259,25 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     if count_loop3_inner < 0:           # when we hit zero
                         val_shift = val_shift + 4       # move to next value in table_110
                         count_loop3 -= 1                # decrement outer loop counter
-                        huff_table_ptr_len += 1
-                        if huff_table_ptr_len <= val_shift:
+                        current_out_length += 1
+                        if current_out_length <= val_shift:
                             continue_outer = True
                             break
                         else:
                             break_outer = True
                             break
                     else:
-                        index_table_0_value = self.index_table_0[in_table_idx]
+                        out_value = self.index_table_0[in_table_idx]
                         in_table_idx += 1
-                        out_len_val = huff_table_ptr_len
-                        if char_count == index_table_0_value:
-                            unk_9 = huff_table_ptr_len
-                            out_len_val = 0x60
+                        out_length = current_out_length
+                        if char_count == out_value:
+                            unk_9 = current_out_length
+                            out_length = 0x60
                         if ((1 << count_loop3) <=0):
                             continue
                         for x in range(0,(1 << count_loop3)):
-                            self.out_value_table[out_table_idx] = index_table_0_value
-                            self.out_len_table[out_table_idx] = out_len_val
+                            self.out_value_table[out_table_idx] = out_value
+                            self.out_len_table[out_table_idx] = out_length
 
                             out_table_idx += 1
                 if break_outer:
@@ -289,8 +286,9 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     continue
                 break
 
-        # Loop 4: write the file out using the lookup tables
-        lookup_val = 0
+        # Loop 4: write the file out using the lookup tables.
+        # Read a byte from the source file and find the value in out_value_table.
+        # Write to the file and then advance the pointer by the appropriate amount.
         next_val_length = 0
         huff_key = 0
         
