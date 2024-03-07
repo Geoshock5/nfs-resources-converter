@@ -13,7 +13,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.index_table_0 = []
         self.out_value_table = [0] * 256    # values to output to uncompressed file
         self.out_len_table = [0] * 256  # length of huffman tree code. Used to know how far to step sub-pointer while reading.
-        self.unk_table_3 = [0] * 16  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number.
+        self.unk_table_3 = [0] * 16  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number?
         self.accumulator = 0
         self.available_acc_bits = 0
 
@@ -37,7 +37,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         uncompressed: bytearray = bytearray()
 
-        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 8
+        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 8.  Potentially this is 16 values to allow for leading 0- or 1- bit (which branch of the tree).
 
         self.define_variable('var_14C', -0x14C, 4)
         self.define_variable('var_154', -0x154, 4)
