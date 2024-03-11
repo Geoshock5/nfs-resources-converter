@@ -152,6 +152,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             self.eax = count_quad = count_quad + 4        # increment count*4 by 4 and drop it in eax
             self.ebx = count_sing = count_sing + 1               # increment count
             self.set_value('[esp+eax+550h+var_154]', self.ecx)  # what is this value? varies run-to-run. ecx is the output - where is it going?
+            print('Set value ' + str(self.ecx) + ' at ' + str(self.esp+self.eax+0x550-0x154))
 
             if self.edx == 0:                   
                 continue                        # not finished yet - jump to start of loop
@@ -160,7 +161,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         # Set things up for second loop
         self.ecx = 0xFFFFFFFF
         count_loop1 = count_sing - 1                    # record the final count of steps for later.  Needed for loop 3.
-        self.set_value('[esp+ebx*4+550h+var_154]', self.ecx)
+        self.set_value('[esp+ebx*4+550h+var_154]', self.ecx) # set the last level / tier to return 1 - the previous value set overflows and returns zero.
+        print('Set value ' + str(bin(self.ecx)) + ' at ' + str(self.esp+self.ebx*4+0x550-0x154))
         self.ebx = 0
         huff_table_0_iter_ptr = 0               # keep a count of iterations in loop 2
         self.eax = 0xFF
@@ -238,11 +240,17 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.out_len_table = [0x40] * 256 # create a 256-length table, value 64. This is the length of each output value in the input stream.
         out_table_idx = 0               # The index of out table to write to.  Increments after every value.
         current_out_length = 1          # Unknown counter. Used in loop 3 only.  Start 1, max 8.  Length in bits of the Huffman table pointer being read from source in loop 4.
-        unk_9 = 0                       # used in loop 3 - and loop 4 in case of break flag (0x60h / 96d)
+        break_bit_length = 0                       # special value used in loop 3 - and loop 4 in case of break flag (char_length from header) - sets length to 0x60h / 96d
         
         # Run outer and inner loops to populate output tables.  Expected output:
         #   - Write the increasing value of index_table_0 to out_value_table, table_110[idx] value times.
         #   - Write the increasing value of current_out_len to out_len_table, table_110[idx] value times.
+        # This function only works for values up to 1 byte long.
+        # Huffman tables generated in loop 1 can be e.g. 11 or 12 bits long for some low-probability keys, so we have to handle these separately in Loop 4.
+        # This is why we flag blank values as length 64 - to signal the key being read is > 8 bits long.
+        # But for simple 1-byte values, we simply generate a mask of all possible values
+        # (e.g. length 1-bit has 2^7 possible tails, length 6 has 2^2) by looping 2^(8-len) times around.
+        # Then we can simply use this as a lookup table when reading the file, and advance the source file by len bits and read the next index.
         if count_loop1 >= 1:               # should be > 1 as this value came from loop 1
             val_shift = 4
             count_loop3 = 7
@@ -271,7 +279,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         in_table_idx += 1
                         out_length = current_out_length
                         if char_count == out_value:
-                            unk_9 = current_out_length
+                            break_bit_length = current_out_length
                             out_length = 0x60
                         if ((1 << count_loop3) <=0):
                             continue
@@ -316,16 +324,17 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 continue                                        # skip the rest and restart the loop
             self.available_acc_bits += next_val_length - 0x10
             if next_val_length == 0x60:                                # 96 = specific break code?
-                next_val_length = unk_9
+                next_val_length = break_bit_length
             else:
                 next_val_length = 8
                 self.edx = self.esi >> 16   # edx is a 16-bit value
                 self.ecx = 0x20             # 32d
                 while True:
                     next_val_length += 1
-                    self.ebp = self.get_value('[esp+ecx+550h+var_14C]')[0] # return an 8-bit code?
+                    self.ebp = self.get_value('[esp+ecx+550h+var_14C]')[0] # return a 16-bit code?
                     self.ecx += 4
                     if self.edx < self.ebp:
+                        print('Read ' + str(self.ebp) + ' from address ' + str(self.esp+self.ecx-4+0x550-0x14C))
                         break
             self.ecx = 0x20 - next_val_length
             self.edx = self.esi >> self.cl                  # copy next val into edx
