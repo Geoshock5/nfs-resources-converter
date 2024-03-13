@@ -14,6 +14,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.out_value_table = [0] * 256    # values to output to uncompressed file
         self.out_len_table = [0] * 256  # length of huffman tree code. Used to know how far to step sub-pointer while reading.
         self.unk_table_3 = [0] * 16  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number?
+        # This table seems to be used as a comparator to check the depth on the tree / the length of a value.  Used on fall-through cases, e.g. Huff codes of length > 8-bit.
         self.accumulator = 0
         self.available_acc_bits = 0
 
@@ -37,7 +38,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         uncompressed: bytearray = bytearray()
 
-        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 8.  Potentially this is 16 values to allow for leading 0- or 1- bit (which branch of the tree).
+        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 16.
+        # For values that are longer than 8 bits, we read through unk_table_3 to establish the correct length.
 
         self.define_variable('var_14C', -0x14C, 4)
         self.define_variable('var_154', -0x154, 4)
@@ -118,7 +120,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     self.available_acc_bits -= self.eax         # subtract what we've just processed
                     self.esi = self.esi << self.cl              # clear the data we just processed from the input stream
                     self.accumulate_if_needed(buffer)           # read more if we're low
-                else:
+                else:                                            # special case for reading >16-bit values
                     self.ebx = self.eax - 16
                     self.edx = self.esi >> (0x20 - self.ebx)
                     self.ecx = self.bl
