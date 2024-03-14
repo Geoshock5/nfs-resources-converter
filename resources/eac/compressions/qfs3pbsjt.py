@@ -74,6 +74,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         while (length<16):
             huff_key = huff_key << 1
             huff_table_codes[length] = huff_key - value_count
+            #TODO: fix the zero code. Dropping bits when the buffer refills?
             if(buf >> 31 == 0):
                 len_val = 2
                 while(buf >> 31 == 0):
@@ -82,7 +83,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     buf = (buf << 1) & 0xFFFFFFFF
                     sub_ptr += 1
                     sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
-                sub_ptr += len_val - 1
+                #sub_ptr += len_val - 1
                 buf = (buf << 1) & 0xFFFFFFFF
                 val = buf >> (32-len_val)
                 val += 1 << len_val
