@@ -38,7 +38,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
     def refill_buf(self, buf, buffer, sub_ptr):
         while (sub_ptr >= 8):
             sub_ptr -= 8
-            buf = buf | int.from_bytes(buffer.read(1), "big") << 1
+            buf = buf | int.from_bytes(buffer.read(1), "big") << sub_ptr
             buf = buf & 0xFFFFFFFF
         return sub_ptr, buf
 
@@ -77,14 +77,17 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             #TODO: fix the zero code. Dropping bits when the buffer refills?
             if(buf >> 31 == 0):
                 len_val = 2
-                while(buf >> 31 == 0):
+                while True:
                     # count the zeroes
                     len_val += 1
                     buf = (buf << 1) & 0xFFFFFFFF
                     sub_ptr += 1
-                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
-                #sub_ptr += len_val - 1
+                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr) #TODO: collapse these into a single function
+                    if(buf>>31 == 1):
+                        #sub_ptr -= 1
+                        break
                 buf = (buf << 1) & 0xFFFFFFFF
+                sub_ptr += 1 #len_val
                 val = buf >> (32-len_val)
                 val += 1 << len_val
                 buf = (buf << len_val) & 0xFFFFFFFF
@@ -113,15 +116,18 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             if(val_check==0):
                 break
 
+        # 3: read in the character list
+        
+
         print(hex(file_header))
         print("Out size: " + str(out_size))
         print("Val count: " + str(char_count))
         print(hex(buf))
-        print("Stopped reading at: " + str(file_ptr))
+        # print("Stopped reading at: " + str(file_ptr))
 
         return bytearray([0])
 
-        # 3: read in the character list
+   
         # 4: generate the lookup tables for output as needed
         # 5: read the input and write the uncompressed output
 
