@@ -49,6 +49,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
 
         huff_table_codes = [0] * 16       # 0.1 - header code for each level
         huff_chars_per_level = [0]        # 0.2 table of code count on each level
+        depth_table = [0]               # 0.3 table with max. val. at each level
 
         uncompressed: bytearray = bytearray()
 
@@ -110,14 +111,53 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 val_check = val_check & 0xFFFF
             
             length += 1
+            depth_table.append(val_check)
 
             if(val==0):
                 continue
             if(val_check==0):
                 break
 
+        depth_table[-1] = 0xFFFFFFFF
+
         # 3: read in the character list
-        
+        char_table = [None] * value_count
+        current_char=0
+        char_value = 0xFF
+
+        while True:
+            if(buf >> 31 == 0):
+                len_val = 2
+                while True:
+                    # count the zeroes
+                    len_val += 1
+                    buf = (buf << 1) & 0xFFFFFFFF
+                    sub_ptr += 1
+                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr) #TODO: collapse these into a single function
+                    if(buf>>31 == 1):
+                        #sub_ptr -= 1
+                        break
+                buf = (buf << 1) & 0xFFFFFFFF
+                sub_ptr += 1
+                val = buf >> (32-len_val)
+                val += 1 << len_val
+                buf = (buf << len_val) & 0xFFFFFFFF
+                sub_ptr += len_val
+                sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+            else:
+                val = buf >> 29
+                sub_ptr += 3
+                buf = (buf << 3) & 0xFFFFFFFF
+                sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+            val -=3
+            while (val!=0):
+                char_value = (char_value + 1) & 0xFF
+                if char_value not in char_table:
+                    val -=1
+            char_table[current_char] = char_value
+            current_char += 1
+            if (current_char >= len(char_table)):
+                break
 
         print(hex(file_header))
         print("Out size: " + str(out_size))
