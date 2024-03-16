@@ -42,6 +42,32 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             buf = buf & 0xFFFFFFFF
         return sub_ptr, buf
 
+    def count_bits(self, buf, buffer, sub_ptr):
+        if(buf >> 31 == 0):
+            len_val = 2
+            while True:
+                # count the zeroes
+                len_val += 1
+                buf = (buf << 1) & 0xFFFFFFFF
+                sub_ptr += 1
+                sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr) #TODO: collapse these into a single function
+                if(buf>>31 == 1):
+                    #sub_ptr -= 1
+                    break
+            buf = (buf << 1) & 0xFFFFFFFF
+            sub_ptr += 1 #len_val
+            val = buf >> (32-len_val)
+            val += 1 << len_val
+            buf = (buf << len_val) & 0xFFFFFFFF
+            sub_ptr += len_val
+            sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+        else:
+            val = buf >> 29
+            sub_ptr += 3
+            buf = (buf << 3) & 0xFFFFFFFF
+            sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+        return val, buf, sub_ptr
+
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         # 0: set up necessary variables
         file_ptr = 0                    # current offset in the stream in bytes
@@ -75,7 +101,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         while (length<16):
             huff_key = huff_key << 1
             huff_table_codes[length] = huff_key - value_count
-            #TODO: fix the zero code. Dropping bits when the buffer refills?
             if(buf >> 31 == 0):
                 len_val = 2
                 while True:
@@ -159,6 +184,58 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             if (current_char >= len(char_table)):
                 break
 
+        # 4: generate the lookup tables for output as needed
+        # 5: read the input and write the uncompressed output
+        huff_key = 0
+        read_val_len = 1
+        bits_read = 0
+        break_outer = 0
+
+        while True:
+            if len(uncompressed) > out_size:
+                print("Error decompressing - length exceeds header!")
+                break
+            while True:
+                huff_key = buf >> 16
+                read_val_len = 1
+                while ((huff_key) > depth_table[read_val_len]):
+                    read_val_len += 1
+                val = buf >> 32-read_val_len
+                val -= huff_table_codes[read_val_len]
+                if(char_table[val]!=char_count):
+                    uncompressed.append(char_table[val] & 0xFF)
+                    buf = buf << read_val_len
+                    sub_ptr += read_val_len
+                    bits_read += read_val_len
+                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+                else:
+                    if(buf >> 31 == 0):
+                        fill_length = 2
+                        while True:
+                            # count the zeroes
+                            fill_length += 1
+                            buf = (buf << 1) & 0xFFFFFFFF
+                            sub_ptr += 1
+                            sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr) #TODO: collapse these into a single function
+                            if(buf>>31 == 1):
+                                #sub_ptr -= 1
+                                break
+                        buf = (buf << 1) & 0xFFFFFFFF
+                        sub_ptr += 1
+                        val = buf >> (32-fill_length)
+                        val += 1 << fill_length
+                        buf = (buf << fill_length) & 0xFFFFFFFF
+                        sub_ptr += fill_length
+                        sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+                    else:
+                        val = buf >> 29
+                        sub_ptr += 3
+                        buf = (buf << 3) & 0xFFFFFFFF
+                        sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+                    fill_length -= 4
+            if break_outer == 1:
+                break
+
         print(hex(file_header))
         print("Out size: " + str(out_size))
         print("Val count: " + str(char_count))
@@ -168,8 +245,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         return bytearray([0])
 
    
-        # 4: generate the lookup tables for output as needed
-        # 5: read the input and write the uncompressed output
+
 
         table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1. Table_110 contains how many characters are of [idx] length - from 1 to 8.  Potentially this is 16 values to allow for leading 0- or 1- bit (which branch of the tree).
 
