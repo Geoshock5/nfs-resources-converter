@@ -6,8 +6,14 @@ from resources.eac.compressions.base import BaseCompressionAlgorithm
 class Qfs3Compression(BaseCompressionAlgorithm):
 
     def __init__(self, *args, **kwargs):
-        self.output_length = 0
+        output_length=0
+        # 0: set up necessary variables
+        self.sub_ptr = 0                 # current offset in bits
 
+        self.huff_table_codes = [0] * 16       # 0.1 - header code for each level
+        self.huff_chars_per_level = [0]        # 0.2 table of code count on each level
+        self.depth_table = [0]               # 0.3 table with max. val. at each level
+        
     def append_to_output(self, buffer, value):
         buffer.extend(value.to_bytes(1, 'little'))
 
@@ -50,13 +56,6 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         return val, buf, sub_ptr
 
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
-        # 0: set up necessary variables
-        sub_ptr = 0                 # current offset in bits
-
-        huff_table_codes = [0] * 16       # 0.1 - header code for each level
-        huff_chars_per_level = [0]        # 0.2 table of code count on each level
-        depth_table = [0]               # 0.3 table with max. val. at each level
-
         uncompressed: bytearray = bytearray()
 
         # 1: read the file header
@@ -75,11 +74,11 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         
         while (length<16):
             huff_key = huff_key << 1
-            huff_table_codes[length] = huff_key - value_count
-            val, buf, sub_ptr = self.count_bits(buf, buffer, sub_ptr)
+            self.huff_table_codes[length] = huff_key - value_count
+            val, buf, self.sub_ptr = self.count_bits(buf, buffer, self.sub_ptr)
             # subtract 4 (for some reason - it happens a lot...)
             val -= 4
-            huff_chars_per_level.append(val)
+            self.huff_chars_per_level.append(val)
             huff_key += val
             value_count += val
             val_check = 0
@@ -89,14 +88,15 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                 val_check = val_check & 0xFFFF
             
             length += 1
-            depth_table.append(val_check)
+            self.depth_table.append(val_check)
 
             if(val==0):
                 continue
             if(val_check==0):
                 break
 
-        depth_table[-1] = 0xFFFFFFFF
+        self.depth_table[-1] = 0xFFFFFFFF
+        print("Tree complete.  Total values: " + str(value_count) + ", max. length: " + str(length))
         length -= 1
 
         # 3: read in the character list
@@ -105,7 +105,7 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         char_value = 0xFF
 
         while True:
-            val, buf, sub_ptr = self.count_bits(buf, buffer, sub_ptr)
+            val, buf, self.sub_ptr = self.count_bits(buf, buffer, self.sub_ptr)
             val -=3
             while (val!=0):
                 char_value = (char_value + 1) & 0xFF
@@ -137,10 +137,10 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             while True:
                 huff_key = buf >> 16
                 read_val_len = 1
-                while ((huff_key) > depth_table[read_val_len]):
+                while ((huff_key) > self.depth_table[read_val_len]):
                     read_val_len += 1
                 val = buf >> 32-read_val_len
-                val = (val - huff_table_codes[read_val_len]) & 0xFF
+                val = (val - self.huff_table_codes[read_val_len]) & 0xFF
                 if(val>len(char_table)): # DEBUG: check for errors - should not happen
                     print("Error reading file! Aborting...")
                     break_outer = 1
@@ -148,21 +148,21 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                 if(char_table[val]!=char_count):
                     uncompressed.append(char_table[val] & 0xFF)
                     buf = (buf << read_val_len) & 0xFFFFFFFF
-                    sub_ptr += read_val_len
-                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+                    self.sub_ptr += read_val_len
+                    self.sub_ptr, buf = self.refill_buf(buf, buffer, self.sub_ptr)
                     continue
                 else:
                     fill_length = 0
                     buf = (buf << read_val_len) & 0xFFFFFFFF
-                    sub_ptr += read_val_len
-                    sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
-                    fill_length, buf, sub_ptr = self.count_bits(buf, buffer, sub_ptr)
+                    self.sub_ptr += read_val_len
+                    self.sub_ptr, buf = self.refill_buf(buf, buffer, self.sub_ptr)
+                    fill_length, buf, self.sub_ptr = self.count_bits(buf, buffer, self.sub_ptr)
                     fill_length -= 4
                     if (fill_length == 0):
                         # read next bit. If 0, do stuff, else output next byte
                         fill_length = buf>>31
                         buf = buf << 1
-                        sub_ptr += 1
+                        self.sub_ptr += 1
                         if(fill_length!=0):
                             # TODO: Add for completeness.  In the original algorithm but doesn't actually do anything for car specs.
                             print("Error: Not implemented yet or end of file!")
@@ -170,8 +170,60 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                         else:
                             uncompressed.append((buf >> 24) & 0xFF)
                             buf = (buf << 8) & 0xFFFFFFFF
-                            sub_ptr += 8
-                            sub_ptr, buf = self.refill_buf(buf, buffer, sub_ptr)
+                            self.sub_ptr += 8
+                            self.sub_ptr, buf = self.refill_buf(buf, buffer, self.sub_ptr)
                     else:
                         self.reuse_output_byte(uncompressed, fill_length)
         return(uncompressed)
+    
+    def compress(self, buffer: BufferedReader, input_length: int) -> bytes:
+        compressed: bytearray = bytearray()
+        
+        # 0 set up variables
+        byte_count = [0] * 256
+        sorted_bytes = [0] * 256
+
+        buffer.seek(0,2)
+        in_len = buffer.tell()
+        buffer.seek(0,0)
+
+        # 1 count the bits in the source file
+        for _ in range(int(in_len)):
+            val = buffer.read(1)[0]
+            byte_count[val] += 1
+
+        # 2 sort by count and then by number
+        sorted_bytes = byte_count
+        sorted_bytes.sort(reverse=1)
+
+        # 3 generate the tree
+        current_val = 0
+        length = 1
+        val_length = 1
+        huff_key = 0
+
+        while True:
+            vals_rem_on_level = (2**length) - 1
+            val_limit = (2**(val_length-1))
+            while((current_val<val_limit) & (vals_rem_on_level>0)):
+                huff_key += 1
+                vals_rem_on_level -= 1
+                # move to next value
+                current_val+=1
+            if(vals_rem_on_level==0):
+                length +=1
+            if(current_val>=val_limit):
+                length +=1
+                val_length += 1
+            huff_key << 1
+            continue
+
+        # 4 generate dictionary of Huff values
+
+        # 5 write the output file
+        # 5.1 header
+        # 5.2 tree depth
+        # 5.3 alphabet
+        # 5.4 encoded output
+
+        return(compressed)
