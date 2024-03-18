@@ -127,6 +127,25 @@ class Qfs3Compression(BaseCompressionAlgorithm):
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         uncompressed: bytearray = bytearray()
 
+        # File structure overview:
+        # Header: similar to standard RefPack
+        # 1. 0x30FB magic (2b)
+        # 2. File size of the uncompressed output in bytes, big-endian (3b)
+        # 3. Number of characters in the uncompressed file (1b)
+        #
+        # Chunk 1: Bit-packed data defining the number of leaves on each level (1 bit, 2 bit, 3 bit...)
+        #
+        # Chunk 2: Character table. The table in chunk 1 uses alphabetical / consecutive values for each node (0~255).  This second chunk translates that into a lookup table,
+        # presumably sorted in something approximating probability order.  The last value (matching header item 3) is an escape character used to flag special functions,
+        # e.g. repeat the last byte x times or do some other special things based on the following bit(s).
+        # This is encoded in bitpacked form as an offset from the previous value (i.e. [val+1] = [val] + offset.  But also, if we've previously seen a value between val and val+1 in this list, don't decrement the offset.
+        #
+        # Chunk 3: These are the bitpacked values of the compressed file.  Read them in one-by-one and then use the dictionary from chunk 2 to write them to the output, processing any special bytes as required.
+        #
+        # The code below seems to work OK with TNFS files.  It's not optimal but clean enough to make the algorithm more transparent.
+        # The next step will be to learn how to compress the original file back into this format, hopefully.
+        # Jon T / Geoshock5 / March 2024
+        
         # 1: read the file header
         file_header = struct.unpack(">h", buffer.read(2))[0]
         out_size = int.from_bytes(struct.unpack("<BBB", buffer.read(3)),"big")
