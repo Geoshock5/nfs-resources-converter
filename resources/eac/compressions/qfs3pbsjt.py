@@ -1,7 +1,74 @@
 from io import BufferedReader
 import struct
+import heapq
 
 from resources.eac.compressions.base import BaseCompressionAlgorithm
+
+# Credits:
+# Original research / file format by AndyGura (github.com/AndyGura)
+# Uncompression code rewritten by Geoshock5 based on code from AndyGura
+# Compression method by Geoshock5 (github.com/Geoshock5)
+# Huffman node/table code from Aashish Barnwal / GeeksForGeeks (https://www.geeksforgeeks.org/huffman-coding-greedy-algo-3/)
+#
+# License: CCBY-SA
+
+class node: 
+    def __init__(self, freq, symbol, left=None, right=None): 
+        # frequency of symbol 
+        self.freq = freq 
+  
+        # symbol name (character) 
+        self.symbol = symbol 
+  
+        # node left of current node 
+        self.left = left 
+  
+        # node right of current node 
+        self.right = right 
+  
+        # tree direction (0/1) 
+        self.huff = '' 
+  
+    def __lt__(self, nxt): 
+        return self.freq < nxt.freq 
+
+# utility function to print huffman 
+# codes for all symbols in the newly 
+# created Huffman tree 
+    
+def printNodes(node, val=''):
+
+    # huffman code for current node 
+    newVal = val + str(node.huff)
+
+    # if node is not an edge node 
+    # then traverse inside it 
+    if(node.left): 
+        printNodes(node.left, newVal) 
+    if(node.right): 
+        printNodes(node.right, newVal) 
+
+        # if node is edge node then 
+        # display its huffman code 
+    if(not node.left and not node.right): 
+        print(f"{node.symbol} -> {newVal}") 
+
+def setNodes(ndict, node, val=''):
+
+    # huffman code for current node 
+    newVal = val + str(node.huff)
+
+    # if node is not an edge node 
+    # then traverse inside it 
+    if(node.left): 
+        setNodes(ndict, node.left, newVal) 
+    if(node.right): 
+        setNodes(ndict, node.right, newVal)
+
+        # if node is edge node then 
+        # record its huffman code 
+    if(not node.left and not node.right): 
+        ndict[node.symbol] = newVal
 
 class Qfs3Compression(BaseCompressionAlgorithm):
 
@@ -13,6 +80,8 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         self.huff_table_codes = [0] * 16       # 0.1 - header code for each level
         self.huff_chars_per_level = [0]        # 0.2 table of code count on each level
         self.depth_table = [0]               # 0.3 table with max. val. at each level
+
+        self.huff_dict = [None] * 257
         
     def append_to_output(self, buffer, value):
         buffer.extend(value.to_bytes(1, 'little'))
@@ -180,43 +249,78 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         compressed: bytearray = bytearray()
         
         # 0 set up variables
-        byte_count = [0] * 256
+        byte_count = [0] * 257
         sorted_bytes = [0] * 256
 
         buffer.seek(0,2)
         in_len = buffer.tell()
         buffer.seek(0,0)
 
-        # 1 count the bits in the source file
+        # 1 count the bits in the source file, splitting out dupes
+        last_val = None
         for _ in range(int(in_len)):
             val = buffer.read(1)[0]
-            byte_count[val] += 1
+            if(val!=last_val):
+                byte_count[val] += 1
+            else:
+                byte_count[256] += 1
+            last_val = val
 
-        # 2 sort by count and then by number
-        sorted_bytes = byte_count
-        sorted_bytes.sort(reverse=1)
+        # 2 sort by count and then by number using a priority queue
+        nodes = [] # initialize priority queue
+        
+        for i in range(257):
+            if(byte_count[i]>0):
+                heapq.heappush(nodes,node(byte_count[i],i))
 
-        # 3 generate the tree
-        current_val = 0
+        count_val = len(nodes)
+
+        while len(nodes)>1:
+            # sort all the nodes in ascending order
+            # based on their frequency
+            left = heapq.heappop(nodes)
+            right = heapq.heappop(nodes)
+        
+            # assign directional value to these nodes 
+            left.huff = 0
+            right.huff = 1
+        
+            # combine the 2 smallest nodes to create 
+            # new node as their parent 
+            newNode = node(left.freq+right.freq, left.symbol+right.symbol, left, right) 
+        
+            heapq.heappush(nodes, newNode) 
+        
+        # Huffman Tree is ready! Create a dictionary
+        setNodes(self.huff_dict, nodes[0])
+
+        # 3 Rebuild the codes canonically
+        canon = []
+        for n in range(len(self.huff_dict)):
+            if(self.huff_dict[n]!=None):
+                heapq.heappush(canon,(len(self.huff_dict[n]),n))
+
+        print("256 -> " + str(self.huff_dict[256]) + ", len: " + str(len(self.huff_dict[256])))
+
+        code = 0
+        last_length = 1
         length = 1
-        val_length = 1
-        huff_key = 0
+        self.huff_chars_per_level = [0] * 16
 
-        while True:
-            vals_rem_on_level = (2**length) - 1
-            val_limit = (2**(val_length-1))
-            while((current_val<val_limit) & (vals_rem_on_level>0)):
-                huff_key += 1
-                vals_rem_on_level -= 1
-                # move to next value
-                current_val+=1
-            if(vals_rem_on_level==0):
-                length +=1
-            if(current_val>=val_limit):
-                length +=1
-                val_length += 1
-            huff_key << 1
-            continue
+        while len(canon)>0:
+            key = heapq.heappop(canon)
+            length = key[0]
+            if(length!=last_length):
+                code += 1
+                code = code << length-last_length
+            elif(length>1):
+                code+=1
+            self.huff_dict[key[1]] = code
+            self.huff_chars_per_level[length] += 1
+            last_length = length
+            # print(str(key[1]) + " -> " + str(key[0]))
+
+        #print("pausing.")
 
         # 4 generate dictionary of Huff values
 
