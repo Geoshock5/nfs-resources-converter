@@ -70,6 +70,14 @@ def setNodes(ndict, node, val=''):
     if(not node.left and not node.right): 
         ndict[node.symbol] = newVal
 
+def pack_bits(val: int):
+    if val<4:
+        len = 3
+        return len, (val+4)
+    else:
+        len = (val+4).bit_length()
+        return len*2, val+4
+
 class Qfs3Compression(BaseCompressionAlgorithm):
 
     def __init__(self, *args, **kwargs):
@@ -269,7 +277,6 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         
         # 0 set up variables
         byte_count = [0] * 257
-        sorted_bytes = [0] * 256
 
         buffer.seek(0,2)
         in_len = buffer.tell()
@@ -314,6 +321,7 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         setNodes(self.huff_dict, nodes[0])
 
         # 3 Rebuild the codes canonically
+        # 4 generate dictionary of Huff values
         canon = []
         for n in range(len(self.huff_dict)):
             if(self.huff_dict[n]!=None):
@@ -337,15 +345,26 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             self.huff_dict[key[1]] = code
             self.huff_chars_per_level[length] += 1
             last_length = length
-            # print(str(key[1]) + " -> " + str(key[0]))
-
-        #print("pausing.")
-
-        # 4 generate dictionary of Huff values
 
         # 5 write the output file
         # 5.1 header
+        compressed.extend([0x30,0xFB]) # standard RefPack magic bytes
+        compressed.extend(in_len.to_bytes(3, byteorder='big')) # uncompressed length - TODO: write as big-endian
+        compressed.append(count_val-1) # number of chars
         # 5.2 tree depth
+        outstr = ''
+        for d in range(length):
+            outlen, outval = pack_bits(self.huff_chars_per_level[d])
+            if outlen>3:
+                for _ in range(int(outlen/2)):
+                    outstr += '0'
+            outstr += str(bin(outval))[2:]
+        while(len(outstr)>8):
+            outval = int(outstr[:8],2)
+            outstr=outstr[8:]
+            compressed.extend(outval.to_bytes(1,byteorder='little'))
+
+        print(outstr)
         # 5.3 alphabet
         # 5.4 encoded output
 
