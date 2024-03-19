@@ -75,8 +75,8 @@ def pack_bits(val: int):
         len = 3
         return len, (val+4)
     else:
-        len = (val+4).bit_length()
-        return len*2, val+4
+        len = (val+4).bit_length() - 2
+        return len, val+4
 
 class Qfs3Compression(BaseCompressionAlgorithm):
 
@@ -356,13 +356,19 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         for d in range(length):
             outlen, outval = pack_bits(self.huff_chars_per_level[d])
             if outlen>3:
-                for _ in range(int(outlen/2)):
+                for _ in range(int(outlen)):
                     outstr += '0'
             outstr += str(bin(outval))[2:]
         while(len(outstr)>8):
             outval = int(outstr[:8],2)
             outstr=outstr[8:]
             compressed.extend(outval.to_bytes(1,byteorder='little'))
+
+        while(len(outstr)<8):   # pack the last line to check compression works
+            outstr += '0'
+
+        outval = int(outstr[:8],2)
+        compressed.extend(outval.to_bytes(1,byteorder='little'))
 
         print(outstr)
         # 5.3 alphabet
