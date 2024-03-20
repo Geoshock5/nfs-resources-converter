@@ -75,7 +75,7 @@ def pack_bits(val: int):
         len = 3
         return len, (val+4)
     else:
-        len = (val+4).bit_length() - 2
+        len = (val+4).bit_length()
         return len, val+4
 
 class Qfs3Compression(BaseCompressionAlgorithm):
@@ -202,7 +202,7 @@ class Qfs3Compression(BaseCompressionAlgorithm):
 
         while True:
             val, buf, self.sub_ptr = self.count_bits(buf, buffer, self.sub_ptr)
-            val -=3
+            val -=3 # why is this only 3 and not 4 per regular RefPack?
             while (val!=0):
                 char_value = (char_value + 1) & 0xFF
                 if char_value not in char_table:
@@ -353,10 +353,10 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         compressed.append(count_val-1) # number of chars
         # 5.2 tree depth
         outstr = ''
-        for d in range(length):
+        for d in range(1,length+1):
             outlen, outval = pack_bits(self.huff_chars_per_level[d])
             if outlen>3:
-                for _ in range(int(outlen)):
+                for _ in range(int(outlen-3)):
                     outstr += '0'
             outstr += str(bin(outval))[2:]
         while(len(outstr)>8):
@@ -364,14 +364,83 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             outstr=outstr[8:]
             compressed.extend(outval.to_bytes(1,byteorder='little'))
 
-        while(len(outstr)<8):   # pack the last line to check compression works
-            outstr += '0'
+        #while(len(outstr)<8):   # pack the last line to check compression works
+        #    outstr += '0'
 
-        outval = int(outstr[:8],2)
-        compressed.extend(outval.to_bytes(1,byteorder='little'))
+        #outval = int(outstr[:8],2)
+        #compressed.extend(outval.to_bytes(1,byteorder='little'))
 
-        print(outstr)
         # 5.3 alphabet
+        last_val = 0xFF
+        chars_added = []
+
+        for n in range(len(self.huff_dict)):
+            if(self.huff_dict[n]!=None):
+                heapq.heappush(canon,(self.huff_dict[n],n))
+
+        while(len(canon)>0):
+            offset=0
+            seek = last_val
+            val = heapq.heappop(canon)[1]
+            
+            if(val==256):
+                val=count_val
+            
+            while seek!=val:
+                seek = (seek+1) & 0xFF
+                if seek not in chars_added:
+                    offset += 1
+            chars_added.append(val)
+            last_val=val
+            offset-=1 # HACK: Not clear why.  Normal RefPack is offset 4.  Correcting the output to fix.
+            outlen, outval = pack_bits(offset)
+            if(outlen>3):
+                while(outlen>3):
+                    outstr+='0'
+                    outlen-=1
+            outstr+=str(bin(outval))[2:]
+
+        while(len(outstr)>8):
+            outval = int(outstr[:8],2)
+            outstr=outstr[8:]
+            compressed.extend(outval.to_bytes(1,byteorder='little'))
+
         # 5.4 encoded output
+        buffer.seek(0,0)
+        last_val = None
+        repeat_len=0
+        while(buffer.tell() < in_len):
+            val = buffer.read(1)[0]
+            if(val==last_val):
+                repeat_len+=1
+            else:
+                if(repeat_len>0):
+                    repeat_len=0
+                    outstr+=str(bin(self.huff_dict[256]))[2:]
+                    # handle repeat bits
+                    outlen, outval = pack_bits(repeat_len)
+                    if(outlen>3):
+                        while(outlen>3):
+                            outstr+='0'
+                            outlen-=1
+                    outstr+=str(bin(outval))[2:]
+                outval = self.huff_dict[val]
+                outstr+=str(bin(outval))[2:]
+            last_val = val
+        
+        outstr+=str(bin(self.huff_dict[256]))[2:]
+        outstr+='1'
+
+        while(len(outstr)>8):
+            outval = int(outstr[:8],2)
+            outstr=outstr[8:]
+            compressed.extend(outval.to_bytes(1,byteorder='little'))
+
+        if(len(outstr)>0):
+            while len(outstr)<8:
+                outstr+='0'
+            outval = int(outstr[:8],2)
+            compressed.extend(outval.to_bytes(1,byteorder='little'))
+            outstr=outstr[8:]
 
         return(compressed)
