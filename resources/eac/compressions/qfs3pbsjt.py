@@ -350,7 +350,7 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         # 5.1 header
         compressed.extend([0x30,0xFB]) # standard RefPack magic bytes
         compressed.extend(in_len.to_bytes(3, byteorder='big')) # uncompressed length - TODO: write as big-endian
-        compressed.append(count_val-1) # number of chars
+        compressed.append(count_val) # number of chars
         # 5.2 tree depth
         outstr = ''
         for d in range(1,length+1):
@@ -415,10 +415,10 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                 repeat_len+=1
             else:
                 if(repeat_len>0):
-                    repeat_len=0
                     outstr+=str(bin(self.huff_dict[256]))[2:]
                     # handle repeat bits
                     outlen, outval = pack_bits(repeat_len)
+                    repeat_len=0
                     if(outlen>3):
                         while(outlen>3):
                             outstr+='0'
@@ -427,17 +427,17 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                 outval = self.huff_dict[val]
                 outstr+=str(bin(outval))[2:]
             last_val = val
-        
-        while(len(outstr)>8):
-            outval = int(outstr[:8],2)
-            outstr=outstr[8:]
-            compressed.extend(outval.to_bytes(1,byteorder='little'))
 
         # TODO: fix this
         outstr+=str(bin(self.huff_dict[256]))[2:]
         # outstr+='1' # this is incorrect.  Should be bitpacked
-        outstr += str(bin(pack_bits('0'))[2:]
-        outstr += str(bin(pack_bits('1'))[2:]
+        outstr += str(bin(pack_bits(0)[1]))[2:]
+        outstr += '1'
+
+        while(len(outstr)>8):
+            outval = int(outstr[:8],2)
+            outstr=outstr[8:]
+            compressed.extend(outval.to_bytes(1,byteorder='little'))
         
         if(len(outstr)>0):
             while len(outstr)<8:
