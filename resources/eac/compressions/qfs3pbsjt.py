@@ -428,14 +428,17 @@ class Qfs3Compression(BaseCompressionAlgorithm):
                 outstr+=str(bin(outval))[2:]
             last_val = val
         
-        outstr+=str(bin(self.huff_dict[256]))[2:]
-        outstr+='1'
-
         while(len(outstr)>8):
             outval = int(outstr[:8],2)
             outstr=outstr[8:]
             compressed.extend(outval.to_bytes(1,byteorder='little'))
 
+        # TODO: fix this
+        outstr+=str(bin(self.huff_dict[256]))[2:]
+        # outstr+='1' # this is incorrect.  Should be bitpacked
+        outstr += str(bin(pack_bits('0'))[2:]
+        outstr += str(bin(pack_bits('1'))[2:]
+        
         if(len(outstr)>0):
             while len(outstr)<8:
                 outstr+='0'
