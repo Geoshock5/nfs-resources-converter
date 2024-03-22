@@ -346,11 +346,16 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             self.huff_chars_per_level[length] += 1
             last_length = length
 
+        # need escape val to be a character not used in the file
+        escape_char=0
+        while(self.huff_dict[escape_char]!=None):
+            escape_char += 1
+
         # 5 write the output file
         # 5.1 header
         compressed.extend([0x30,0xFB]) # standard RefPack magic bytes
         compressed.extend(in_len.to_bytes(3, byteorder='big')) # uncompressed length - TODO: write as big-endian
-        compressed.append(count_val) # number of chars
+        compressed.append(escape_char) # special escape char for repeated bytes etc
         # 5.2 tree depth
         outstr = ''
         for d in range(1,length+1):
@@ -382,15 +387,17 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             offset=0
             seek = last_val
             val = heapq.heappop(canon)[1]
-            
+
             if(val==256):
-                val=count_val
-            
+                val=escape_char
+
             while seek!=val:
                 seek = (seek+1) & 0xFF
-                if seek not in chars_added:
+                if (seek not in chars_added):
                     offset += 1
-            chars_added.append(val)
+            chars_added.append(val)                        
+            if(val==count_val):
+                special_char_done = True
             last_val=val
             offset-=1 # HACK: Not clear why.  Normal RefPack is offset 4.  Correcting the output to fix.
             outlen, outval = pack_bits(offset)
