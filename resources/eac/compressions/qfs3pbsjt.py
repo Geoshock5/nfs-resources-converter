@@ -282,6 +282,8 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         in_len = buffer.tell()
         buffer.seek(0,0)
 
+        checksum = 0
+
         # 1 count the bits in the source file, splitting out dupes
         last_val = None
         for _ in range(int(in_len)):
@@ -418,6 +420,10 @@ class Qfs3Compression(BaseCompressionAlgorithm):
         repeat_len=0
         while(buffer.tell() < in_len):
             val = buffer.read(1)[0]
+            
+            if(buffer.tell()<=1880):
+                checksum += val # calculate for editing physics
+
             if(val==last_val):
                 repeat_len+=1
             else:
@@ -437,7 +443,6 @@ class Qfs3Compression(BaseCompressionAlgorithm):
 
         # TODO: fix this
         outstr+=str(bin(self.huff_dict[256]))[2:]
-        # outstr+='1' # this is incorrect.  Should be bitpacked
         outstr += str(bin(pack_bits(0)[1]))[2:]
         outstr += '1'
 
@@ -452,5 +457,7 @@ class Qfs3Compression(BaseCompressionAlgorithm):
             outval = int(outstr[:8],2)
             compressed.extend(outval.to_bytes(1,byteorder='little'))
             outstr=outstr[8:]
+
+        print ("Checksum: " + str(hex(checksum)))
 
         return(compressed)
