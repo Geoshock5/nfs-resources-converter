@@ -16,7 +16,7 @@ from resources.eac.compressions.base import BaseCompressionAlgorithm
 # License: CCBY-SA
 
 # Node class. Used by Huffman tree code.
-class node: 
+class node:  
     def __init__(self, freq, symbol, left=None, right=None): 
         # frequency of symbol 
         self.freq = freq 
@@ -92,9 +92,10 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.index_table_0 = []
         self.unk_table = [0] * 256    # values to output to uncompressed file
         self.unk_table_2 = [0] * 256  # length of huffman tree code
-        self.unk_table_3 = [0] * 256  # maybe has different size. TODO: understand how this table is built.  Created during loop 1. More important for binary pattern than decimal number.
+        self.unk_table_3 = [0] * 256  # comparators / codes for each level.  Used to check the length in bits of the current value
         self.accumulator = 0
         self.available_acc_bits = 0
+        self.huff_dict = [None] * 257
 
     def append_to_output(self, buffer, value):
         buffer.extend(value.to_bytes(1, 'little'))
@@ -116,19 +117,13 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
     def uncompress(self, buffer: BufferedReader, input_length: int) -> bytes:
         uncompressed: bytearray = bytearray()
 
-        table_110 = [0] * 16                                        # this is the value of the edx in each part of chunk 1
+        table_110 = [0] * 16                                        # number of entries of x bits long
 
         self.define_variable('var_14C', -0x14C, 4)
         self.define_variable('var_154', -0x154, 4)
 
         index_table_0_capacity = 0                                  # this is the sum of all the values in table_110
         unk_counter = 0
-
-        # set up counters for each operation
-        counter_1 = 0
-        counter_2 = 0
-        counter_3 = 0
-        counter_4 = 0
 
         self.available_acc_bits = 0
         file_header = self.accumulator = read_short(buffer, 'big') # 2b read - read the header
@@ -164,7 +159,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         self.ebp = 0
         while True:                                         # Loop 1: this loop appears to be reading the first chunk of data 3 bytes at a time and generating tables from it.  table_110 and unk_table_3 are built.  Some values are set with set_value but not yet clear where/why
                                                             # eax = length of tree branch? ebx holds counters for inc/dec. edx holds command bits for mem storage. esi = input buffer
-            counter_1 += 1
             self.ebp = self.ebp << 1                        # TODO: evaluate evolution of ebp across loops
             self.ecx = index_table_0_capacity               # set to the sum of all flag bits so far
             self.eax = self.ebp - self.ecx                  # TODO: work out what this value represents. Could be some kind of mask?
@@ -247,7 +241,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         if index_table_0_capacity > 0:                          # Loop 2
             self.index_table_0 = [None] * index_table_0_capacity
             while True:                                         # iterate through, populating index_table_0.  Count runs in ebx.  Hold total run count in ecx and break at num limit.
-                counter_2 += 1
                 if self.get_register_signed_value('esi') >= 0:  # if leading bit = 0
                     self.edx = 2
                     if (self.esi >> 16) == 0:
@@ -324,7 +317,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             count_quad = self.ecx
             val_shift = self.eax
             while True:                                         # populate unk_table and unk_table_2
-                counter_3 += 1
                 self.eax = val_shift
                 assert self.eax % 4 == 0
                 self.eax = table_110[int(self.eax / 4)]         # read back in from table_110
@@ -378,7 +370,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                     continue
                 break
         while True:                                             # write the file out using the lookup tables
-            counter_4 += 1
             if len(uncompressed) > self.output_length:
                 raise Exception('Uncompress algorythm writes more that file length')
             self.eax = self.unk_table_2[self.esi >> 0x18]       # should be little-endian - clamp index to 256. Len to read from inbuf / esi
@@ -402,7 +393,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             self.available_acc_bits += self.eax - 0x10
             if self.eax == 0x60:                                # 96 = specific break code?
                 self.eax = unk_9
-            else:
+            else:                                               # how to handle long vals >8 bits.  Compare against the comparator values from loop 1
                 self.eax = 8
                 self.edx = self.esi >> 16
                 self.ecx = 0x20
@@ -593,8 +584,8 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                 break
 
         # 4: generate the lookup tables for output as needed
-        # This was part of the original algorithm but is not used here as it makes the decompression much more complex to understand.
-        # Computationally probably more expensive but clock cycles are cheap these days vs the 90s ;-)
+        # This was part of the original algorithm but is not used here as it makes the decompression longer and much more complex to understand.
+        # Computationally this is probably more expensive but clock cycles are cheap these days vs the 90s ;-)
 
         # 5: read the input and write the uncompressed output
         huff_key = 0
@@ -641,7 +632,7 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
                         self.sub_ptr += 1
                         if(fill_length!=0):
                             # TODO: Add for completeness.  In the original algorithm but doesn't actually do anything for car specs.
-                            print("Function not implemented yet or end of file flag reached!")
+                            print("End of file flag reached. Breaking...")
                             break
                         else:
                             uncompressed.append((buf >> 24) & 0xFF)
@@ -661,8 +652,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         buffer.seek(0,2)
         in_len = buffer.tell()
         buffer.seek(0,0)
-
-        checksum = 0    # Refer to car physics documentation for info.  Not used in compression algorithm but the game will break the physics if this doesn't match.
 
         # 1 count the bits in the source file, splitting out dupes
         last_val = None
@@ -793,9 +782,6 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
         while(buffer.tell() < in_len):
             val = buffer.read(1)[0]
             
-            if(buffer.tell()<=1880):
-                checksum += val # calculate for editing physics
-
             if(val==last_val):
                 repeat_len+=1
             else:
@@ -830,7 +816,5 @@ class Qfs3Compression(BaseCompressionAlgorithm, AsmRunner):
             outval = int(outstr[:8],2)
             compressed.extend(outval.to_bytes(1,byteorder='little'))
             outstr=outstr[8:]
-
-        # print ("Checksum value: " + str(hex(checksum))) # DEBUG: Since we're reading it anyway, print sum of bytes 0-1880 for modding purposes.
 
         return(compressed)
