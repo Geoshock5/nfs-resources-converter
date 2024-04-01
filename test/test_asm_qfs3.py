@@ -1,3 +1,4 @@
+import io
 import os
 import unittest
 
@@ -69,6 +70,22 @@ class TestAsmQFS3Algorythm(unittest.TestCase):
             uncompressed = parser.uncompress(file, os.path.getsize(file_name))
             print('CHECKING OUTPUT....')
             with open('test/samples/GVERTBST.FSH', 'rb') as fsh_file:
+                fsh = fsh_file.read()
+                self.assertEqual(len(fsh), len(uncompressed))
+                for i in range(len(fsh)):
+                    if i % 10000 == 0:
+                        print(f"{i}/{len(fsh)}")
+                    self.assertEqual(fsh[i], uncompressed[i])
+
+    def test_5_ldiabl_pbs_compression(self):
+        parser = Qfs3Compression()
+        file_name = 'test/samples/LDIABL.PBS.BIN'
+        with open(file_name, 'rb') as file:
+            compressed = parser.compress(file, os.path.getsize(file_name))
+            comp_stream = io.BytesIO(compressed)
+            uncompressed = parser.uncompress(comp_stream, len(compressed))
+            print('CHECKING OUTPUT....')
+            with open('test/samples/LDIABL.PBS.BIN', 'rb') as fsh_file:
                 fsh = fsh_file.read()
                 self.assertEqual(len(fsh), len(uncompressed))
                 for i in range(len(fsh)):
